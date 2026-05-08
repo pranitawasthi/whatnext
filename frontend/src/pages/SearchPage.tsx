@@ -25,12 +25,13 @@ export function SearchPage() {
     setError("");
     try {
       const response = await api.search(query, contentType, includeInternet);
+      console.log("Search response:", response);
       setItems(response.items);
       setKeywords(response.keywords);
       setCounts({ local: response.local_count, internet: response.internet_count });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
-    } finally {
+    } finally { 
       setLoading(false);
     }
   }

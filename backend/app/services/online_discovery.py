@@ -1,7 +1,8 @@
+import json
 import re
+from typing import Any
 
-import httpx
-
+from app.core.config import settings
 from app.models.content import Content
 from app.repositories.content import ContentRepository
 from app.services.ai import ai_service
@@ -65,95 +66,142 @@ class OnlineDiscoveryService:
         return imported, keywords
 
     async def search(self, query: str, content_type: str | None, limit: int) -> list[dict]:
-        async with httpx.AsyncClient(timeout=12) as client:
-            tasks = []
-            if content_type in (None, "book"):
-                tasks.append(self._search_books(client, query, limit))
-            if content_type in (None, "movie"):
-                tasks.append(self._search_itunes(client, query, "movie", "movie", limit))
-            if content_type in (None, "tv"):
-                tasks.append(self._search_itunes(client, query, "tvShow", "tvSeason", limit))
-            results: list[dict] = []
-            for task in tasks:
+        if not ai_service.groq:
+            return []
+        try:
+            response = await ai_service.groq.chat.completions.create(
+                model=settings.online_discovery_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You discover real books, movies, and TV shows for a recommendation app. "
+                            "Use web search when available. Return only valid JSON with an items array. "
+                            "Do not invent titles, dates, descriptions, or image URLs."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": self._build_discovery_prompt(query, content_type, limit),
+                    },
+                ],
+                temperature=0.2,
+                max_tokens=1800,
+            )
+        except Exception:
+            return []
+
+        content = response.choices[0].message.content if response.choices else None
+        return self._parse_items(content, content_type, limit)
+
+    def _build_discovery_prompt(self, query: str, content_type: str | None, limit: int) -> str:
+        type_instruction = content_type if content_type else "book, movie, and tv"
+        return (
+            f"Find up to {min(limit, 10)} real {type_instruction} recommendations matching this query: {query!r}.\n"
+            "Return this exact JSON shape:\n"
+            '{"items":[{"title":"string","description":"string","genres":["string"],'
+            '"themes":["string"],"mood":["string"],"storytelling_style":["string"],'
+            '"pacing":"slow|medium|fast|unknown","release_year":2000,'
+            '"content_type":"book|movie|tv","poster_url":null}]}\n'
+            "Descriptions should be factual and concise. Use null for release_year or poster_url when uncertain."
+        )
+
+    def _parse_items(self, content: str | None, content_type: str | None, limit: int) -> list[dict]:
+        if not content:
+            return []
+        payload = self._load_json(content)
+        raw_items = payload.get("items", payload) if isinstance(payload, dict) else payload
+        if not isinstance(raw_items, list):
+            return []
+
+        items: list[dict] = []
+        for raw_item in raw_items:
+            normalized = self._normalize_item(raw_item, content_type)
+            if normalized:
+                items.append(normalized)
+            if len(items) >= limit:
+                break
+        return items
+
+    def _load_json(self, content: str) -> Any:
+        cleaned = content.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            start = cleaned.find("[")
+            end = cleaned.rfind("]")
+            if start != -1 and end != -1 and end > start:
                 try:
-                    results.extend(await task)
-                except httpx.HTTPError:
-                    continue
-            return results[:limit]
+                    return json.loads(cleaned[start : end + 1])
+                except json.JSONDecodeError:
+                    return None
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    return json.loads(cleaned[start : end + 1])
+                except json.JSONDecodeError:
+                    return None
+            return None
 
-    async def _search_books(self, client: httpx.AsyncClient, query: str, limit: int) -> list[dict]:
-        response = await client.get(
-            "https://openlibrary.org/search.json",
-            params={
-                "q": query,
-                "limit": min(limit, 10),
-                "fields": "key,title,author_name,first_publish_year,subject,cover_i",
-            },
-        )
-        response.raise_for_status()
-        docs = response.json().get("docs", [])
-        items: list[dict] = []
-        for doc in docs:
-            title = doc.get("title")
-            if not title:
-                continue
-            authors = ", ".join(doc.get("author_name", [])[:2])
-            subjects = [str(item).lower() for item in doc.get("subject", [])[:8]]
-            cover_id = doc.get("cover_i")
-            items.append(
-                {
-                    "title": title,
-                    "description": f"{title} by {authors}. Subjects include {', '.join(subjects[:5])}.".strip(),
-                    "genres": subjects[:4] or ["fiction"],
-                    "themes": subjects[4:8] or subjects[:4],
-                    "mood": [],
-                    "storytelling_style": [],
-                    "pacing": "unknown",
-                    "release_year": doc.get("first_publish_year"),
-                    "content_type": "book",
-                    "poster_url": f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg" if cover_id else None,
-                }
-            )
-        return items
+    def _normalize_item(self, item: Any, requested_type: str | None) -> dict | None:
+        if not isinstance(item, dict):
+            return None
 
-    async def _search_itunes(
-        self,
-        client: httpx.AsyncClient,
-        query: str,
-        media: str,
-        entity: str,
-        limit: int,
-    ) -> list[dict]:
-        response = await client.get(
-            "https://itunes.apple.com/search",
-            params={"term": query, "country": "US", "media": media, "entity": entity, "limit": min(limit, 10)},
-        )
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        items: list[dict] = []
-        for result in results:
-            title = result.get("trackName") or result.get("collectionName")
-            description = result.get("longDescription") or result.get("shortDescription") or result.get("description")
-            if not title or not description:
-                continue
-            release_date = result.get("releaseDate") or ""
-            artwork = result.get("artworkUrl100")
-            content_type = "movie" if media == "movie" else "tv"
-            items.append(
-                {
-                    "title": title,
-                    "description": description,
-                    "genres": [result.get("primaryGenreName")] if result.get("primaryGenreName") else [],
-                    "themes": [],
-                    "mood": [],
-                    "storytelling_style": [],
-                    "pacing": "unknown",
-                    "release_year": int(release_date[:4]) if release_date[:4].isdigit() else None,
-                    "content_type": content_type,
-                    "poster_url": artwork.replace("100x100", "600x600") if artwork else None,
-                }
-            )
-        return items
+        title = self._clean_string(item.get("title"))
+        description = self._clean_string(item.get("description"))
+        item_type = self._clean_string(item.get("content_type"))
+        item_type = item_type.lower() if item_type else None
+        if item_type == "show":
+            item_type = "tv"
+        if not title or not description or item_type not in {"book", "movie", "tv"}:
+            return None
+        if requested_type and item_type != requested_type:
+            return None
+
+        pacing = self._clean_string(item.get("pacing")) or "unknown"
+        pacing = pacing.lower()
+        if pacing not in {"slow", "medium", "fast", "unknown"}:
+            pacing = "unknown"
+
+        poster_url = self._clean_string(item.get("poster_url"))
+        if poster_url and not poster_url.startswith(("http://", "https://")):
+            poster_url = None
+
+        return {
+            "title": title,
+            "description": description,
+            "genres": self._clean_string_list(item.get("genres")),
+            "themes": self._clean_string_list(item.get("themes")),
+            "mood": self._clean_string_list(item.get("mood")),
+            "storytelling_style": self._clean_string_list(item.get("storytelling_style")),
+            "pacing": pacing,
+            "release_year": self._clean_year(item.get("release_year")),
+            "content_type": item_type,
+            "poster_url": poster_url,
+        }
+
+    def _clean_string(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    def _clean_string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [cleaned for item in value if (cleaned := self._clean_string(item))]
+
+    def _clean_year(self, value: Any) -> int | None:
+        if isinstance(value, int):
+            return value if 1800 <= value <= 2100 else None
+        if isinstance(value, str) and value.isdigit():
+            year = int(value)
+            return year if 1800 <= year <= 2100 else None
+        return None
 
 
 online_discovery = OnlineDiscoveryService()

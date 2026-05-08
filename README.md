@@ -10,7 +10,7 @@ WhatNext is a Dockerized full-stack app:
 - Backend: async FastAPI with clean layers for routers, services, repositories, schemas, and models.
 - Database: SQLite for relational app data plus Qdrant for cosine similarity search.
 - Auth: email/password signup and login with JWT bearer tokens.
-- AI: local `sentence-transformers` embeddings with `BAAI/bge-small-en-v1.5`; Groq chat explanations when `GROQ_API_KEY` is set, with OpenAI chat or deterministic fallback for explanations.
+- AI: local `sentence-transformers` embeddings with `BAAI/bge-small-en-v1.5`; Groq chat explanations and Groq Compound online discovery when `GROQ_API_KEY` is set, with OpenAI chat or deterministic fallback for explanations.
 
 Recommendation workflow:
 
@@ -24,7 +24,7 @@ Recommendation workflow:
    - rating adds a small boost or penalty
 4. Qdrant retrieves nearest content by cosine distance.
 5. Candidates already consumed by the user are excluded.
-6. If online discovery is enabled, Open Library and Apple iTunes Search API results are imported into SQLite and Qdrant before ranking.
+6. If online discovery is enabled, Groq Compound web search results are imported into SQLite and Qdrant before ranking.
 7. Results are ranked and cached in `recommendations`.
 8. Groq/OpenAI generates a concise explanation for each recommendation.
 
@@ -101,7 +101,7 @@ For local backend development outside Docker, keep Qdrant running:
 ```bash
 docker compose up qdrant
 ```
-
+ 
 ## API Examples
 
 Sign up:
@@ -160,6 +160,6 @@ Search returns:
 
 - `database/schema.sql` is a SQLite reference schema; SQLAlchemy creates tables automatically at startup.
 - Qdrant stores `BAAI/bge-small-en-v1.5` vectors and metadata payloads for content search.
-- In development, missing AI keys do not block the app; embeddings are generated locally and explanations are templated when Groq/OpenAI keys are absent.
+- In development, missing AI keys do not block the app; embeddings are generated locally, explanations are templated when Groq/OpenAI keys are absent, and online discovery imports are skipped without Groq.
 - In production, set a strong `JWT_SECRET`, configure CORS to the deployed frontend origin, and mount/cache Hugging Face model files for faster cold starts.
 - If you already created the old Postgres/pgvector stack, reset it once with `docker compose down -v`, then run `docker compose up --build` and seed again.

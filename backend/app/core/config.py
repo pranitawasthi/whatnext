@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     embedding_model: str = Field(default="BAAI/bge-small-en-v1.5", alias="EMBEDDING_MODEL")
     explanation_model: str = Field(default="llama-3.3-70b-versatile", alias="EXPLANATION_MODEL")
+    # online_discovery_model: str = Field(default="groq/compound-mini", alias="ONLINE_DISCOVERY_MODEL")
+    online_discovery_model: str = Field(default="llama-3.3-70b-versatile", alias="ONLINE_DISCOVERY_MODEL")
     embedding_dimensions: int = Field(default=384, alias="EMBEDDING_DIMENSIONS")
     ai_timeout_seconds: int = 20
 

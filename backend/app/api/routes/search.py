@@ -17,7 +17,7 @@ async def semantic_search(payload: SearchRequest, db: AsyncSession = Depends(get
     internet_count = 0
     if payload.include_internet:
         imported, keywords = await online_discovery.search_and_import(
-            db,
+            db, 
             payload.query,
             payload.content_type,
             max(6, payload.limit // 2),
@@ -49,3 +49,4 @@ async def semantic_search(payload: SearchRequest, db: AsyncSession = Depends(get
         "local_count": max(len(items) - internet_count, 0),
         "internet_count": internet_count,
     }
+    

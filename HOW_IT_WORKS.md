@@ -10,9 +10,7 @@ This document describes the current implementation state of the MVP.
 - Vector database: Qdrant
 - Embeddings: local `sentence-transformers` model `BAAI/bge-small-en-v1.5`
 - Explanations: Groq chat API when `GROQ_API_KEY` is set
-- Internet discovery:
-  - Open Library for books
-  - Apple iTunes Search API for movies and TV
+- Internet discovery: Groq Compound web search when `GROQ_API_KEY` is set
 
 ## Runtime Services
 
@@ -147,9 +145,7 @@ Search currently does two things:
 When a user searches:
 
 1. Backend extracts keywords from the query.
-2. If `include_internet` is true, backend searches:
-   - Open Library for books
-   - Apple iTunes Search API for movies and TV
+2. If `include_internet` is true, backend asks Groq Compound web search for matching books, movies, and TV shows.
 3. Internet results are normalized into the app's content shape.
 4. New internet results are embedded locally.
 5. New internet results are saved into SQLite.
@@ -235,12 +231,12 @@ backend/app/services/online_discovery.py
 
 ## Groq Usage
 
-Groq is used only for explanation text.
+Groq is used for recommendation explanation text and online discovery.
 
 It does not generate embeddings.
 Embeddings are local.
 
-If `GROQ_API_KEY` is missing or Groq fails, the backend returns a fallback explanation.
+If `GROQ_API_KEY` is missing or Groq fails, the backend returns a fallback explanation and skips online discovery imports.
 
 Relevant file:
 
@@ -318,10 +314,9 @@ docker compose exec backend python scripts/seed.py
 
 ## Current Limitations
 
-- Internet movie/TV search uses Apple iTunes API, not TMDB.
 - Internet discovery metadata can be sparse for mood, pacing, and storytelling style.
 - Recommendations improve as more content is imported and logged.
-- Groq explanations depend on the API key and network availability.
+- Groq explanations and online discovery depend on the API key and network availability.
 - Search imports internet results into the catalog automatically.
 - Duplicate detection is title/type/year based, not provider-ID based yet.
 
